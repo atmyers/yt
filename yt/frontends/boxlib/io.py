@@ -86,7 +86,8 @@ class IOHandlerBoxlib(BaseIOHandler):
         shape = hi - lo + 1
         with open(filename, "rb") as f:
             f.seek(offset)
-            f.readline()  # always skip the first line
+            if (self.ds.index._header_in_fabs):
+                f.readline()  # skip the first line (contains a header)
             arr = np.fromfile(f, 'float64', np.product(shape))
             arr = arr.reshape(shape, order='F')
         return arr

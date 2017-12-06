@@ -64,7 +64,8 @@ _header_pattern = [
                r"\(\((\d+,\d+)\) \((\d+,\d+)\) \((\d+,\d+)\)\) (\d+)\n"),
     re.compile(_endian_regex +
                r"\(\((\d+,\d+,\d+)\) \((\d+,\d+,\d+)\) \((\d+,\d+,\d+)\)\) (\d+)\n")]
-
+_real_descriptor_regex = r"\(\(\d+, \([0-9 ]+\)\),\((\d+), \(([0-9 ]+)\)\)\)"
+_real_descriptor_pattern = re.compile(_real_descriptor_regex)
 
 class BoxlibGrid(AMRGridPatch):
     _id_offset = 0
@@ -111,7 +112,8 @@ class BoxlibGrid(AMRGridPatch):
         # _offset.
         if self._offset == -1:
             f.seek(self._base_offset, os.SEEK_SET)
-            f.readline()
+            if (self.index._header_in_fabs):
+                f.readline()
             self._offset = f.tell()
         return self._offset
 
@@ -328,13 +330,15 @@ class BoxlibHierarchy(GridIndex):
     grid = BoxlibGrid
 
     def __init__(self, ds, dataset_type='boxlib_native'):
+        self._header_in_fabs = True
         self.dataset_type = dataset_type
         self.header_filename = os.path.join(ds.output_dir, 'Header')
         self.directory = ds.output_dir
         self.particle_headers = {}
 
         GridIndex.__init__(self, ds, dataset_type)
-        self._cache_endianness(self.grids[-1])
+        if (self._header_in_fabs): 
+            self._cache_endianness(self.grids[-1])
 
     def _parse_index(self):
         """
@@ -450,21 +454,17 @@ class BoxlibHierarchy(GridIndex):
             grid_counter += ngrids
             # already read the filenames above...
         self.float_type = 'float64'
+        # depending on the version, the endianness might be stored here.
+        next(level_header_file).split()  # skip a line
+        real_descriptor = next(level_header_file)
+        match = _real_descriptor_pattern.search(real_descriptor)
+        if match is None:
+            return
+        bpr, endian = match.groups(0)
+        self._set_dtype(bpr, endian)
+        self._header_in_fabs = False
 
-    def _cache_endianness(self, test_grid):
-        """
-        Cache the endianness and bytes perreal of the grids by using a
-        test grid and assuming that all grids have the same
-        endianness. This is a pretty safe assumption since Boxlib uses
-        one file per processor, and if you're running on a cluster
-        with different endian processors, then you're on your own!
-        """
-        # open the test file & grab the header
-        with open(os.path.expanduser(test_grid.filename), 'rb') as f:
-            header = f.readline().decode("ascii", "ignore")
-
-        bpr, endian, start, stop, centering, nc = \
-            _header_pattern[self.dimensionality-1].search(header).groups()
+    def _set_dtype(self, bpr, endian):
         # Note that previously we were using a different value for BPR than we
         # use now.  Here is an example set of information directly from BoxLib:
         #  * DOUBLE data
@@ -480,6 +480,22 @@ class BoxlibHierarchy(GridIndex):
 
         mylog.debug("FAB header suggests dtype of %s", dtype)
         self._dtype = np.dtype(dtype)
+        
+    def _cache_endianness(self, test_grid):
+        """
+        Cache the endianness and bytes perreal of the grids by using a
+        test grid and assuming that all grids have the same
+        endianness. This is a pretty safe assumption since Boxlib uses
+        one file per processor, and if you're running on a cluster
+        with different endian processors, then you're on your own!
+        """
+        # open the test file & grab the header
+        with open(os.path.expanduser(test_grid.filename), 'rb') as f:
+            header = f.readline().decode("ascii", "ignore")
+
+        bpr, endian, start, stop, centering, nc = \
+            _header_pattern[self.dimensionality-1].search(header).groups()
+        self._set_dtype(bpr, endian)
 
     def _populate_grid_objects(self):
         mylog.debug("Creating grid objects")
