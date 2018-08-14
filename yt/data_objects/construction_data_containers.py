@@ -335,7 +335,8 @@ class YTQuadTreeProj(YTSelectionContainer2D):
         _units_initialized = False
         with self.data_source._field_parameter_state(self.field_parameters):
             for chunk in parallel_objects(self.data_source.chunks(
-                                          [], "io", local_only = True)):
+                    [], "io", local_only = True),
+                    njobs = "insitu" in self.data_source.ds._dataset_type):
                 mylog.debug("Adding chunk (%s) to tree (%0.3e GB RAM)",
                             chunk.ires.size, get_memory_usage()/1024.)
                 if _units_initialized is False:
