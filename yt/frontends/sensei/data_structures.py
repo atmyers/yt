@@ -53,6 +53,11 @@ from.misc import amrdata
 
 from vtk import mutable
 
+from yt.utilities.parallel_tools.parallel_analysis_interface \
+    import communication_system
+comm = communication_system.communicators[-1]
+
+
 class SenseiGridInSitu(AMRGridPatch):
     """
 
@@ -117,6 +122,10 @@ class SenseiHierarchyInSitu(GridIndex):
         self.grids = []
         si, ei, LE, RE = [], [], [], []
 
+        origin = np.array(self.dataset.amrdata.Origin, dtype=np.float64)
+        dx0    = np.array(self.dataset.amrdata.Spacing, dtype=np.float64)
+        ref_ratio = np.array(self.dataset.amrdata.RefRatio, dtype=np.int32)
+        
         mesh = self.dataset.mesh
         it = mesh.NewIterator()
         gi = 0
@@ -141,11 +150,10 @@ class SenseiHierarchyInSitu(GridIndex):
             si.append(lo)
             ei.append(hi)
             
-            # world coordinate axis aligned bounding box, [x0, x1, y0, y1, z0, z1]
-            bounds = patch.GetBounds()
-            xhi = np.array(bounds[1::2], dtype=np.float64)
-            xlo = np.array(bounds[0::2], dtype=np.float64)
-
+            dx_lev = dx0/np.product(ref_ratio[:lev], axis=0)[0]
+            xhi = origin + dx_lev*(hi+1)
+            xlo = origin + dx_lev*lo
+            
             LE.append(xlo)
             RE.append(xhi)
             
@@ -160,6 +168,7 @@ class SenseiHierarchyInSitu(GridIndex):
             it.GoToNextItem()
 
         self._fill_arrays(ei, si, LE, RE)
+        self.grid_procs = np.array(self.dataset.amrdata.BlockOwner, dtype=np.int32)
         
     def _populate_grid_objects(self):
         mylog.debug("Creating grid objects")
@@ -168,6 +177,7 @@ class SenseiHierarchyInSitu(GridIndex):
         for i, grid in enumerate(self.grids):
             grid._prepare_grid()
             grid._setup_dx()
+            grid.proc_num = self.grid_procs[i]
 
     def _reconstruct_parent_child(self):
         if (self.max_level == 0):
@@ -207,18 +217,18 @@ class SenseiHierarchyInSitu(GridIndex):
         for fn in field_names:
             self.field_list.append(('sensei', fn))
             
-    # def _chunk_io(self, dobj, cache = True, local_only = False):
-    #     gfiles = defaultdict(list)
-    #     gobjs = getattr(dobj._current_chunk, "objs", dobj._chunk_info)
-    #     for g in gobjs:
-    #         gfiles[g.filename].append(g)
-    #     for fn in sorted(gfiles):
-    #         if local_only:
-    #             gobjs = [g for g in gfiles[fn] if g.proc_num == self.comm.rank]
-    #             gfiles[fn] = gobjs
-    #         gs = gfiles[fn]
-    #         count = self._count_selection(dobj, gs)
-    #         yield YTDataChunk(dobj, "io", gs, count, cache = cache)
+    def _chunk_io(self, dobj, cache = True, local_only = False):
+        gfiles = defaultdict(list)
+        gobjs = getattr(dobj._current_chunk, "objs", dobj._chunk_info)
+        for g in gobjs:
+            gfiles[g.filename].append(g)
+        for fn in sorted(gfiles):
+            if local_only:
+                gobjs = [g for g in gfiles[fn] if g.proc_num == self.comm.rank]
+                gfiles[fn] = gobjs
+            gs = gfiles[fn]
+            count = self._count_selection(dobj, gs)
+            yield YTDataChunk(dobj, "io", gs, count, cache = cache)
 
 
 class SenseiHierarchyInSitu1D(SenseiHierarchyInSitu):
@@ -324,10 +334,20 @@ class SenseiDatasetInSitu(Dataset):
         self.refine_by = self.amrdata.RefRatio[0][0]
         self.periodicity = ensure_tuple([True, True, True])
         self.dimensionality = 2
-        self.domain_left_edge = np.array(self.amrdata.Bounds[::2])[:self.dimensionality]
-        self.domain_right_edge = np.array(self.amrdata.Bounds[1::2])[:self.dimensionality]
+        if comm.rank in (0, None):
+            domain_left_edge = self.amrdata.Bounds[::2][:self.dimensionality]
+            domain_right_edge = self.amrdata.Bounds[1::2][:self.dimensionality]
+        else:
+            domain_left_edge = None
+            domain_right_edge = None
+        self.domain_left_edge = comm.mpi_bcast(domain_left_edge)
+        self.domain_right_edge = comm.mpi_bcast(domain_right_edge)
         self.base_grid_dx = np.array(self.amrdata.Spacing)[:self.dimensionality]
 
+        # FIXME
+        self.domain_left_edge = np.array([0.0, 0.0])
+        self.domain_right_edge = np.array([1.0, 1.0])
+        
         self.current_time = 0.0
         self.unique_identifier = 0.0
         self.cosmological_simulation = False
