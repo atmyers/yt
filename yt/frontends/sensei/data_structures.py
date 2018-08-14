@@ -49,13 +49,12 @@ from yt.utilities.lib.misc_utilities import \
 from .fields import \
     SenseiFieldInfo
 
-from.misc import amrdata
-
+from.misc import SenseiMetaData
 from vtk import mutable
 
-from yt.utilities.parallel_tools.parallel_analysis_interface \
-    import communication_system
-comm = communication_system.communicators[-1]
+# from yt.utilities.parallel_tools.parallel_analysis_interface \
+#     import communication_system
+# comm = communication_system.communicators[-1]
 
 
 class SenseiGridInSitu(AMRGridPatch):
@@ -157,8 +156,6 @@ class SenseiHierarchyInSitu(GridIndex):
             LE.append(xlo)
             RE.append(xhi)
             
-            self.grid_procs[gi, :] = 0
-
             go = self.grid(gi, idx, self)
             go.Level = lev.get()
             go.start_index = lo
@@ -273,15 +270,9 @@ class SenseiDatasetInSitu(Dataset):
         obj.__init__(*args, **kwargs)
         return obj
 
-    def __init__(self, adaptor, meshName, arrayCen, arrayName,
-                 parameter_override=None, conversion_override=None):
+    def __init__(self, adaptor, meshName, arrayCen, arrayName):
 
         self.fluid_types += ("sensei",)
-
-        if parameter_override is None: parameter_override = {}
-        self._parameter_override = parameter_override
-        if conversion_override is None: conversion_override = {}
-        self._conversion_override = conversion_override
 
         self.adaptor = adaptor
         self.names = []
@@ -291,7 +282,7 @@ class SenseiDatasetInSitu(Dataset):
         while i < nMeshes:
             name = adaptor.GetMeshName(i)
             self.names.append(name)
-            self.meshes[name] = amrdata(adaptor, name)
+            self.meshes[name] = SenseiMetaData(adaptor, name)
             i += 1
         # print it for debugging
         mylog.debug('==== metadata ====\n')
@@ -304,8 +295,13 @@ class SenseiDatasetInSitu(Dataset):
 
         # pull the array from the sim
         self.adaptor.AddArray(self.mesh, meshName, arrayCen, arrayName)
-            
-        super(SenseiDatasetInSitu, self).__init__("InMemoryParameterFile", self._dataset_type)
+
+        self.current_time = self.adaptor.GetDataTime()
+        self.iteration = self.adaptor.GetDataTimeStep()
+        self.unique_identifier = self.current_time
+        self.cosmological_simulation = False
+
+        super(SenseiDatasetInSitu, self).__init__("SenseiInSituDataset_%.5d" % self.iteration, self._dataset_type)
         
     def _setup_1d(self):
         self._index_class = SenseiHierarchyInSitu1D
@@ -326,31 +322,11 @@ class SenseiDatasetInSitu(Dataset):
             np.concatenate([self.base_grid_dx, [1.0]])
         
     def _parse_parameter_file(self):
-        for p, v in self._parameter_override.items():
-            self.parameters[p] = v
-        for p, v in self._conversion_override.items():
-            self.conversion_factors[p] = v
-
         self.refine_by = self.amrdata.RefRatio[0][0]
         self.periodicity = ensure_tuple([True, True, True])
         self.dimensionality = 2
-        if comm.rank in (0, None):
-            domain_left_edge = self.amrdata.Bounds[::2][:self.dimensionality]
-            domain_right_edge = self.amrdata.Bounds[1::2][:self.dimensionality]
-        else:
-            domain_left_edge = None
-            domain_right_edge = None
-        self.domain_left_edge = comm.mpi_bcast(domain_left_edge)
-        self.domain_right_edge = comm.mpi_bcast(domain_right_edge)
+        self.domain_left_edge, self.domain_right_edge = self.amrdata.get_domain_edges(self.dimensionality)
         self.base_grid_dx = np.array(self.amrdata.Spacing)[:self.dimensionality]
-
-        # FIXME
-        self.domain_left_edge = np.array([0.0, 0.0])
-        self.domain_right_edge = np.array([1.0, 1.0])
-        
-        self.current_time = 0.0
-        self.unique_identifier = 0.0
-        self.cosmological_simulation = False
 
         if self.dimensionality == 1:
             self._setup_1d()

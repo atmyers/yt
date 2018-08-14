@@ -13,6 +13,7 @@ Miscellaneous classes and functions that are Sensei-specific
 # The full license is in the file COPYING.txt, distributed with this software.
 #-----------------------------------------------------------------------------
 
+import numpy as np
 from vtk import vtkDataObject, mutable
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
@@ -130,3 +131,18 @@ class amrdata():
 
         self.Mesh = mesh
         return
+
+
+class SenseiMetaData(amrdata):
+    
+    def get_domain_edges(self, dim):
+        left_edge  = np.array(self.Bounds[::2])[:dim]
+        right_edge = np.array(self.Bounds[1::2])[:dim]
+
+        temp_left = left_edge.copy()
+        temp_right = right_edge.copy()
+
+        comm.Allreduce([left_edge,  MPI.DOUBLE], [temp_left,  MPI.DOUBLE], op = MPI.MIN)
+        comm.Allreduce([right_edge, MPI.DOUBLE], [temp_right, MPI.DOUBLE], op = MPI.MAX)
+
+        return temp_left, temp_right
