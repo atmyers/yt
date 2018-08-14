@@ -140,7 +140,7 @@ class AMRGridPatch(YTSelectionContainer):
         id = self.id - self._id_offset
         ds = self.ds
         index = self.index
-        if self.Parent is not None:
+        if self.Parent is not None and not isinstance(self.Parent, list):
             if not hasattr(self.Parent, 'dds'):
                 self.Parent._setup_dx()
             self.dds = self.Parent.dds.d / self.ds.refine_by

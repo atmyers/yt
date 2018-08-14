@@ -44,6 +44,7 @@ _frontends = [
     'ramses',
     'rockstar',
     'sdf',
+    'sensei',
     'stream',
     'tipsy',
     'ytdata',
