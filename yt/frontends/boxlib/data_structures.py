@@ -1623,3 +1623,137 @@ class AMReXDataset(BoxlibDataset):
     @classmethod
     def _is_valid(cls, *args, **kwargs):
         return False
+
+
+class WarpXLabFrameGrid(AMRGridPatch):
+    _id_offset = 0
+    _offset = -1
+
+    def __init__(self, grid_id, offset, filename=None,
+                 index=None):
+        super(BoxlibGrid, self).__init__(grid_id, filename, index)
+        
+
+class WarpXLabFrameHierarchy(GridIndex):
+
+    grid = WarpXLabFrameGrid
+
+    def __init__(self, ds, dataset_type='warpxlf_native'):
+        self.dataset_type = dataset_type
+        self.header_filename = os.path.join(ds.output_dir, 'Header')
+        self.directory = ds.output_dir
+        self.particle_headers = {}
+
+        GridIndex.__init__(self, ds, dataset_type)
+        self._cache_endianness(self.grids[-1])
+
+
+class WarpXLabFrameDataset(Dataset):
+
+    _index_class = WarpXLabFrameHierarchy
+    _field_info_class = WarpXFieldInfo
+    _output_prefix = None
+
+    periodicity = (False, False, False)
+
+    def __init__(self, output_dir,
+                 dataset_type='warpxlf_native',
+                 storage_filename=None,
+                 units_override=None,
+                 unit_system="mks"):
+
+        self.fluid_types += ("warpxlf",)
+        self.output_dir = os.path.abspath(os.path.expanduser(output_dir))
+        self.storage_filename = storage_filename
+        
+        Dataset.__init__(self, output_dir, dataset_type,
+                         units_override=units_override,
+                         unit_system=unit_system)
+        
+    def _localize_check(self, fn):
+        if fn is None:
+            return None
+        # If the file exists, use it.  If not, set it to None.
+        root_dir = os.path.dirname(self.output_dir)
+        full_fn = os.path.join(root_dir, fn)
+        if os.path.exists(full_fn):
+            return full_fn
+        return None
+
+    @classmethod
+    def _is_valid(cls, *args, **kwargs):
+        return False
+
+    def _parse_parameter_file(self):
+        """
+        Parses the parameter file and establishes the various
+        dictionaries.
+        """
+        hfn = os.path.join(self.output_dir, 'Header')
+        with open(hfn, "r") as header_file:
+            self.current_time = float(header_file.readline().strip())
+            line = header_file.readline().strip().split()
+            self.domain_dimensions = np.array([int(val) for val in line])
+            line = header_file.readline().strip().split()            
+            self.domain_left_edge = np.array([float(val) for val in line])
+            line = header_file.readline().strip().split()            
+            self.domain_right_edge = np.array([float(val) for val in line])
+            line = header_file.readline().strip().split()            
+            self._field_list = [val for val in line]
+            
+        self.unique_identifier = int(os.stat(hfn)[ST_CTIME])
+
+    def _parse_header_file(self):
+        self.dimensionality = 2
+        self.geometry = "cartesian"
+
+        # overrides for 1/2-dimensional data
+        if self.dimensionality == 1:
+            self._setup1d()
+        elif self.dimensionality == 2:
+            self._setup2d()
+
+    def _set_code_unit_attributes(self):
+        setdefaultattr(self, 'length_unit', self.quan(1.0, "m"))
+        setdefaultattr(self, 'mass_unit', self.quan(1.0, "kg"))
+        setdefaultattr(self, 'time_unit', self.quan(1.0, "s"))
+        setdefaultattr(self, 'velocity_unit', self.quan(1.0, "m/s"))
+
+    def _setup1d(self):
+        self.domain_left_edge = \
+            np.concatenate([self.domain_left_edge, [0.0, 0.0]])
+        self.domain_right_edge = \
+            np.concatenate([self.domain_right_edge, [1.0, 1.0]])
+        tmp = self.domain_dimensions.tolist()
+        tmp.extend((1, 1))
+        self.domain_dimensions = np.array(tmp)
+        tmp = list(self.periodicity)
+        tmp[1] = False
+        tmp[2] = False
+        self.periodicity = ensure_tuple(tmp)
+
+    def _setup2d(self):
+        self.domain_left_edge = \
+            np.concatenate([self.domain_left_edge, [0.0]])
+        self.domain_right_edge = \
+            np.concatenate([self.domain_right_edge, [1.0]])
+        if self.geometry == "cylindrical":
+            dre = self.domain_right_edge
+            dre[2] = 2.0 * np.pi
+            self.domain_right_edge = dre
+        tmp = self.domain_dimensions.tolist()
+        tmp.append(1)
+        self.domain_dimensions = np.array(tmp)
+        tmp = list(self.periodicity)
+        tmp[2] = False
+        self.periodicity = ensure_tuple(tmp)
+
+    @parallel_root_only
+    def print_key_parameters(self):
+        for a in ["current_time", "domain_dimensions", "domain_left_edge",
+                  "domain_right_edge"]:
+            if not hasattr(self, a):
+                mylog.error("Missing %s in parameter file definition!", a)
+                continue
+            v = getattr(self, a)
+            mylog.info("Parameters: %-25s = %s", a, v)

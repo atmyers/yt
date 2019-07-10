@@ -24,7 +24,8 @@ from .data_structures import \
       NyxDataset, \
       NyxHierarchy, \
       WarpXDataset, \
-      WarpXHierarchy
+      WarpXHierarchy, \
+      WarpXLabFrameDataset
 
 from .fields import \
       BoxlibFieldInfo, \
